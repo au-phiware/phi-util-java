@@ -33,7 +33,8 @@
  * http://creativecommons.org/licenses/publicdomain
  */
 
-package java.util.concurrent;
+package au.com.phiware.util.concurrent;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.*;
 import java.util.*;
 
@@ -72,8 +73,8 @@ import java.util.*;
  * @author Doug Lea
  * @param <E> the type of elements held in this collection
  */
-public class ArrayBlockingQueue<E> extends AbstractQueue<E>
-        implements BlockingQueue<E>, java.io.Serializable {
+public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
+        implements CloseableBlockingQueue<E>, java.io.Serializable {
 
     /**
      * Serialization ID. This class relies on default serialization
@@ -81,7 +82,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      * it is empty. Otherwise it could not be declared final, which is
      * necessary here.
      */
-    private static final long serialVersionUID = -817911632652898426L;
+    private static final long serialVersionUID = 9096484164273922265L;
 
     /** The queued items  */
     private final E[] items;
@@ -103,6 +104,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     private final Condition notEmpty;
     /** Condition for waiting puts */
     private final Condition notFull;
+    /** Flag for rejecting future inserts */
+    private boolean closed = false;
 
     // Internal helper methods
 
@@ -173,7 +176,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      * @param capacity the capacity of this queue
      * @throws IllegalArgumentException if <tt>capacity</tt> is less than 1
      */
-    public ArrayBlockingQueue(int capacity) {
+    public ArrayCloseableBlockingQueue(int capacity) {
         this(capacity, false);
     }
 
@@ -187,7 +190,8 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      *        if <tt>false</tt> the access order is unspecified.
      * @throws IllegalArgumentException if <tt>capacity</tt> is less than 1
      */
-    public ArrayBlockingQueue(int capacity, boolean fair) {
+    @SuppressWarnings("unchecked")
+    public ArrayCloseableBlockingQueue(int capacity, boolean fair) {
         if (capacity <= 0)
             throw new IllegalArgumentException();
         this.items = (E[]) new Object[capacity];
@@ -212,7 +216,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      * @throws NullPointerException if the specified collection or any
      *         of its elements are null
      */
-    public ArrayBlockingQueue(int capacity, boolean fair,
+    public ArrayCloseableBlockingQueue(int capacity, boolean fair,
                               Collection<? extends E> c) {
         this(capacity, fair);
         if (capacity < c.size())
@@ -222,11 +226,30 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
             add(it.next());
     }
 
+    @Override
+    public boolean isClosed() {
+        return closed ;
+    }
+
+    @Override
+    public void close() {
+        if (closed) return;
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            closed = true;
+            notEmpty.signalAll();
+            notFull.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /**
      * Inserts the specified element at the tail of this queue if it is
      * possible to do so immediately without exceeding the queue's capacity,
      * returning <tt>true</tt> upon success and throwing an
-     * <tt>IllegalStateException</tt> if this queue is full.
+     * <tt>IllegalStateException</tt> if this queue is full or closed.
      *
      * @param e the element to add
      * @return <tt>true</tt> (as specified by {@link Collection#add})
@@ -234,14 +257,21 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      * @throws NullPointerException if the specified element is null
      */
     public boolean add(E e) {
-        return super.add(e);
+        try {
+            return super.add(e);
+        } catch(IllegalStateException x) {
+            if (closed)
+                throw new QueueClosedException("Queue closed");
+            else
+                throw x;
+        }
     }
 
     /**
      * Inserts the specified element at the tail of this queue if it is
      * possible to do so immediately without exceeding the queue's capacity,
      * returning <tt>true</tt> upon success and <tt>false</tt> if this queue
-     * is full.  This method is generally preferable to method {@link #add},
+     * is full or closed.  This method is generally preferable to method {@link #add},
      * which can fail to insert an element only by throwing an exception.
      *
      * @throws NullPointerException if the specified element is null
@@ -251,7 +281,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            if (count == items.length)
+            if (closed || count == items.length)
                 return false;
             else {
                 insert(e);
@@ -266,6 +296,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      * Inserts the specified element at the tail of this queue, waiting
      * for space to become available if the queue is full.
      *
+     * @throws IllegalStateException if or when this queue is closed.
      * @throws InterruptedException {@inheritDoc}
      * @throws NullPointerException {@inheritDoc}
      */
@@ -276,8 +307,10 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         lock.lockInterruptibly();
         try {
             try {
-                while (count == items.length)
+                while (!closed && count == items.length)
                     notFull.await();
+                if (closed)
+                    throw new QueueClosedException("Queue closed");
             } catch (InterruptedException ie) {
                 notFull.signal(); // propagate to non-interrupted thread
                 throw ie;
@@ -289,7 +322,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
     }
 
     /**
-     * Inserts the specified element at the tail of this queue, waiting
+     * Inserts the specified element at the tail of this queue if it is not closed, waiting
      * up to the specified wait time for space to become available if
      * the queue is full.
      *
@@ -305,11 +338,11 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         lock.lockInterruptibly();
         try {
             for (;;) {
-                if (count != items.length) {
+                if (!closed && count != items.length) {
                     insert(e);
                     return true;
                 }
-                if (nanos <= 0)
+                if (closed || nanos <= 0)
                     return false;
                 try {
                     nanos = notFull.awaitNanos(nanos);
@@ -341,12 +374,14 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         lock.lockInterruptibly();
         try {
             try {
-                while (count == 0)
+                while (!closed && count == 0)
                     notEmpty.await();
             } catch (InterruptedException ie) {
                 notEmpty.signal(); // propagate to non-interrupted thread
                 throw ie;
             }
+            if (closed && count == 0)
+                throw new QueueClosedException("Queue closed");
             E x = extract();
             return x;
         } finally {
@@ -364,7 +399,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
                     E x = extract();
                     return x;
                 }
-                if (nanos <= 0)
+                if (closed || nanos <= 0)
                     return null;
                 try {
                     nanos = notEmpty.awaitNanos(nanos);
@@ -423,6 +458,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
+            if (closed) return 0;
             return items.length - count;
         } finally {
             lock.unlock();
@@ -557,6 +593,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
      *         this queue
      * @throws NullPointerException if the specified array is null
      */
+    @SuppressWarnings("unchecked")
     public <T> T[] toArray(T[] a) {
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
@@ -671,7 +708,6 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         try {
             int i = takeIndex;
             int n = 0;
-            int sz = count;
             int max = (maxElements < count)? maxElements : count;
             while (n < max) {
                 c.add(items[i]);
@@ -770,7 +806,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         }
 
         public E next() {
-            final ReentrantLock lock = ArrayBlockingQueue.this.lock;
+            final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             lock.lock();
             try {
                 if (nextIndex < 0)
@@ -786,7 +822,7 @@ public class ArrayBlockingQueue<E> extends AbstractQueue<E>
         }
 
         public void remove() {
-            final ReentrantLock lock = ArrayBlockingQueue.this.lock;
+            final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             lock.lock();
             try {
                 int i = lastRet;
