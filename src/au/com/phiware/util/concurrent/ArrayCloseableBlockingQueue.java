@@ -92,6 +92,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     private int putIndex;
     /** Number of items in the queue */
     private int count;
+    /** Number of calls to #preventClose() */
+    private int closable;
 
     /*
      * Concurrency control uses the classic two-condition algorithm
@@ -104,6 +106,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     private final Condition notEmpty;
     /** Condition for waiting puts */
     private final Condition notFull;
+    /** Condition for waiting closures */
+    private final Condition notClosable;
     /** Flag for rejecting future inserts */
     private boolean closed = false;
 
@@ -125,6 +129,17 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         putIndex = inc(putIndex);
         ++count;
         notEmpty.signal();
+    }
+
+    /**
+     * Closes and signals.
+     * Call only when holding lock.
+     */
+    private void closeNow() {
+        closed = true;
+        notClosable.signalAll();
+        notEmpty.signalAll();
+        notFull.signalAll();
     }
 
     /**
@@ -196,8 +211,9 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             throw new IllegalArgumentException();
         this.items = (E[]) new Object[capacity];
         lock = new ReentrantLock(fair);
-        notEmpty = lock.newCondition();
-        notFull =  lock.newCondition();
+        notEmpty    = lock.newCondition();
+        notFull     = lock.newCondition();
+        notClosable = lock.newCondition();
     }
 
     /**
@@ -232,14 +248,85 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     }
 
     @Override
-    public void close() {
+    public void close() throws InterruptedException {
         if (closed) return;
+        final ReentrantLock lock = this.lock;
+        lock.lockInterruptibly();
+        try {
+            while (closable > 0)
+                notClosable.await();
+            closeNow();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public boolean tryClose() {
+        if (closed) return true;
+        final ReentrantLock lock = this.lock;
+        if (!lock.tryLock())
+            return closed;
+        try {
+            if (closable > 0)
+                return false;
+            closeNow();
+            return true;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public boolean tryClose(long time, TimeUnit unit)
+            throws InterruptedException {
+        if (closed) return true;
+        long nanos = unit.toNanos(time);
+        final ReentrantLock lock = this.lock;
+        lock.lockInterruptibly();
+        try {
+            for (;;) {
+                if (!closed && closable ==  0) {
+                    closeNow();
+                    return true;
+                }
+                if (closed || nanos <= 0)
+                    return closed;
+                try {
+                    nanos = notClosable.awaitNanos(nanos);
+                } catch (InterruptedException ie) {
+                    notClosable.signal(); // propagate to non-interrupted thread
+                    throw ie;
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public void preventClose() {
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            closed = true;
-            notEmpty.signalAll();
-            notFull.signalAll();
+            if (closed)
+                throw new QueueClosedException("Queue already closed");
+            closable++;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public void permitClose() {
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            if (closed)
+                throw new QueueClosedException("Queue already closed, which thread didn't call preventClose()?");
+            closable--;
+            if (closable == 0)
+                notClosable.signal();
         } finally {
             lock.unlock();
         }
