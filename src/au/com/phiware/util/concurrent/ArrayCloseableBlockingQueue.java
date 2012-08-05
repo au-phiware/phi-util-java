@@ -86,8 +86,10 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
 
     /** The queued items  */
     private final E[] items;
+    /** items index for the first item */
+    private int headIndex;
     /** items index for next take, poll or remove */
-    private int takeIndex;
+    private int takeOffset;
     /** items index for next put, offer, or add. */
     private int putIndex;
     /** Number of items in the queue */
@@ -119,10 +121,17 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     final int inc(int i) {
         return (++i == items.length)? 0 : i;
     }
+    /**
+     * Circularly decrement i by n for n > 0.
+     */
+    final int dec(int i, int n) {
+        i -= (n % items.length);
+        return (i < 0) ? i + items.length : i;
+    }
 
     /**
      * Inserts element at current put position, advances, and signals.
-     * Call only when holding lock.
+     * Call only when holding lock and there is sufficient space.
      */
     private void insert(E x) {
         items[putIndex] = x;
@@ -148,11 +157,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      */
     private E extract() {
         final E[] items = this.items;
-        E x = items[takeIndex];
-        items[takeIndex] = null;
-        takeIndex = inc(takeIndex);
-        --count;
-        notFull.signal();
+        E x = items[(headIndex + takeOffset) % items.length];
+        removeAt((headIndex + takeOffset) % items.length);
         return x;
     }
 
@@ -163,13 +169,15 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     void removeAt(int i) {
         final E[] items = this.items;
         // if removing front item, just advance
-        if (i == takeIndex) {
-            items[takeIndex] = null;
-            takeIndex = inc(takeIndex);
+        if (i == headIndex) {
+            items[headIndex] = null;
+            headIndex = inc(headIndex);
         } else {
             // slide over all others up through putIndex.
             for (;;) {
                 int nexti = inc(i);
+                if (nexti == (headIndex + takeOffset) % items.length)
+                    --takeOffset;
                 if (nexti != putIndex) {
                     items[i] = items[nexti];
                     i = nexti;
@@ -447,7 +455,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            if (count == 0)
+            if (takeOffset == count)
                 return null;
             E x = extract();
             return x;
@@ -461,13 +469,13 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         lock.lockInterruptibly();
         try {
             try {
-                while (!closed && count == 0)
+                while (!closed && takeOffset == count)
                     notEmpty.await();
             } catch (InterruptedException ie) {
                 notEmpty.signal(); // propagate to non-interrupted thread
                 throw ie;
             }
-            if (closed && count == 0)
+            if (closed && takeOffset == count)
                 throw new QueueClosedException("Queue closed");
             E x = extract();
             return x;
@@ -482,7 +490,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         lock.lockInterruptibly();
         try {
             for (;;) {
-                if (count != 0) {
+                if (takeOffset != count) {
                     E x = extract();
                     return x;
                 }
@@ -505,7 +513,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            return (count == 0) ? null : items[takeIndex];
+            return (takeOffset == count) ? null : items[(headIndex + takeOffset) % items.length];
         } finally {
             lock.unlock();
         }
@@ -569,7 +577,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            int i = takeIndex;
+            int i = headIndex;
             int k = 0;
             for (;;) {
                 if (k++ >= count)
@@ -600,7 +608,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            int i = takeIndex;
+            int i = headIndex;
             int k = 0;
             while (k++ < count) {
                 if (o.equals(items[i]))
@@ -633,7 +641,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         try {
             Object[] a = new Object[count];
             int k = 0;
-            int i = takeIndex;
+            int i = headIndex;
             while (k < count) {
                 a[k++] = items[i];
                 i = inc(i);
@@ -693,7 +701,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     );
 
             int k = 0;
-            int i = takeIndex;
+            int i = headIndex;
             while (k < count) {
                 a[k++] = (T)items[i];
                 i = inc(i);
@@ -725,7 +733,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
-            int i = takeIndex;
+            int i = headIndex;
             int k = count;
             while (k-- > 0) {
                 items[i] = null;
@@ -733,7 +741,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             }
             count = 0;
             putIndex = 0;
-            takeIndex = 0;
+            takeOffset = 0;
+            headIndex = 0;
             notFull.signalAll();
         } finally {
             lock.unlock();
@@ -741,42 +750,90 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     }
 
     /**
+     * Removes all available and possibly future elements from this queue and adds them
+     * to the given collection.
+     *
+     * This operation blocks until this queue is closed or the current thread is interrupted
+     * and may be more efficient than repeatedly taking from this queue.
+     * When this operation returns this queue will be closed and empty unless the thread is
+     * interrupted in which case the interrupt status will be set.
+     * This operation does not exclude other threads from removing items from this queue
+     * but each item is removed from this queue before the item is transferred to the
+     * specified collection.
+     *
+     * A failure encountered while attempting to add elements to collection
+     * <tt>receiver</tt> may result in elements being in neither,
+     * either or both collections when the associated exception is thrown.
+     *
+     * Attempts to drain a queue to itself result in <tt>IllegalArgumentException</tt>.
+     * Further, the behavior of this operation is undefined if the specified collection
+     * is modified while the operation is in progress.
+     *
+     * @return the number of elements transferred
+     * @param receiver of transferred elements
+     *
      * @throws UnsupportedOperationException {@inheritDoc}
      * @throws ClassCastException            {@inheritDoc}
      * @throws NullPointerException          {@inheritDoc}
      * @throws IllegalArgumentException      {@inheritDoc}
      */
-    public int drainTo(Collection<? super E> c) {
-        if (c == null)
+    public int drainTo(Collection<? super E> receiver) {
+        if (receiver == null)
             throw new NullPointerException();
-        if (c == this)
+        if (receiver == this)
             throw new IllegalArgumentException();
-        final E[] items = this.items;
+        int n = 0;
         final ReentrantLock lock = this.lock;
-        lock.lock();
         try {
-            int i = takeIndex;
-            int n = 0;
-            int max = count;
-            while (n < max) {
-                c.add(items[i]);
-                items[i] = null;
-                i = inc(i);
-                ++n;
+            lock.lockInterruptibly();
+            try {
+                for (;;) {
+                    try {
+                        while (!closed && takeOffset == count)
+                            notEmpty.await();
+                    } catch (InterruptedException ie) {
+                        notEmpty.signal(); // propagate to non-interrupted thread
+                        throw ie;
+                    }
+                    if (closed && takeOffset == count)
+                        break;
+                    receiver.add(extract());
+                    n++;
+                }
+            } finally {
+                lock.unlock();
             }
-            if (n > 0) {
-                count = 0;
-                putIndex = 0;
-                takeIndex = 0;
-                notFull.signalAll();
-            }
-            return n;
-        } finally {
-            lock.unlock();
+        } catch (InterruptedException earlyExit) {
+            Thread.currentThread().interrupt(); // let caller know
         }
+        return n;
     }
 
     /**
+     * Removes at most the given number of available and future elements from
+     * this queue and adds them to the given collection.
+     *
+     * This operation may block until this queue is closed and may be more
+     * efficient than repeatedly taking from this queue.
+     * This operation may return an integer less then <tt>maxElements</tt> if the thread is
+     * interrupted, in which case the interrupt status will be set.
+     * This operation does not exclude other threads from removing items from this queue
+     * but no item is removed from this queue until all items are transferred to the
+     * specified collection. (No item may be remove by another thread <em>and</em> transferred
+     * to the specified collection.)
+     *
+     * A failure encountered while attempting to add elements to collection
+     * <tt>receiver</tt> may result in elements being in neither,
+     * either or both collections when the associated exception is thrown.
+     *
+     * Attempts to drain a queue to itself result in <tt>IllegalArgumentException</tt>.
+     * Further, the behavior of this operation is undefined if the specified collection
+     * is modified while the operation is in progress.
+     *
+     * @return the actual number of elements transferred
+     * @param receiver of transferred elements
+     * @param maxElements the maximum number of elements to transfer
+     *
      * @throws UnsupportedOperationException {@inheritDoc}
      * @throws ClassCastException            {@inheritDoc}
      * @throws NullPointerException          {@inheritDoc}
@@ -789,28 +846,66 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             throw new IllegalArgumentException();
         if (maxElements <= 0)
             return 0;
+        int n = 0;
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
-        lock.lock();
+        int max = items.length > maxElements ? maxElements : items.length;
+        int[] offsets = new int[max];
+        int length = 0;
         try {
-            int i = takeIndex;
-            int n = 0;
-            int max = (maxElements < count)? maxElements : count;
-            while (n < max) {
-                c.add(items[i]);
-                items[i] = null;
-                i = inc(i);
-                ++n;
+            lock.lockInterruptibly();
+            try {
+                for (; n < max; n++) {
+                    try {
+                        while (!closed && takeOffset == count)
+                            notEmpty.await();
+                    } catch (InterruptedException ie) {
+                        notEmpty.signal(); // propagate to non-interrupted thread
+                        throw ie;
+                    }
+                    if (closed && takeOffset == count)
+                        break;
+                    c.add(items[(headIndex + takeOffset) % items.length]);
+                    offsets[n] = takeOffset;
+                    takeOffset++;
+                }
+            } finally {
+                length = n;
+                if (length > 0) {
+                    // Remove all drained items (somewhere from headIndex to takeIndex (excl.))
+                    int i = n;
+                    while (i-- > 0) {
+                        int j = offsets[i];
+                        if (j == 0) {
+                            items[headIndex] = null;
+                            headIndex = inc(headIndex);
+                            n--;
+                        } else {
+                            // slide over all others up through takeIndex.
+                            for (;;) {
+                                if (j + 1 != takeOffset) {
+                                    items[(headIndex + j) % items.length] = items[(headIndex + j + 1) % items.length];
+                                } else {
+                                    items[(headIndex + j) % items.length] = null;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // slide others from takeIndex up by n
+                    for (i = (headIndex + takeOffset) % items.length; i != putIndex; i = inc(i))
+                        items[dec(i, n)] = items[i];
+                    for (i = dec(i, n); i != putIndex; i = inc(i))
+                        items[i] = null;
+                    takeOffset -= n;
+                    putIndex = dec(putIndex, n);
+                }
+                lock.unlock();
             }
-            if (n > 0) {
-                count -= n;
-                takeIndex = i;
-                notFull.signalAll();
-            }
-            return n;
-        } finally {
-            lock.unlock();
+        } catch (InterruptedException earlyExit) {
+            Thread.currentThread().interrupt(); // let caller know
         }
+        return length;
     }
 
 
@@ -863,8 +958,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             if (count == 0)
                 nextIndex = -1;
             else {
-                nextIndex = takeIndex;
-                nextItem = items[takeIndex];
+                nextIndex = headIndex;
+                nextItem = items[headIndex];
             }
         }
 
@@ -917,10 +1012,10 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     throw new IllegalStateException();
                 lastRet = -1;
 
-                int ti = takeIndex;
+                int head = headIndex;
                 removeAt(i);
                 // back up cursor (reset to front if was first element)
-                nextIndex = (i == ti) ? takeIndex : i;
+                nextIndex = (i == head) ? headIndex : i;
                 checkNext();
             } finally {
                 lock.unlock();
