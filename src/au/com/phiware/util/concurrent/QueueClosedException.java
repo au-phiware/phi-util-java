@@ -17,6 +17,12 @@
  */
 package au.com.phiware.util.concurrent;
 
+/**
+ * Thrown when an operation cannot be performed because a {@link CloseableBlockingQueue} is closed.
+ *
+ * @author Corin Lawson <corin@phiware.com.au>
+ *
+ */
 public class QueueClosedException extends IllegalStateException {
 
 	private static final long serialVersionUID = -8393303638950186454L;
