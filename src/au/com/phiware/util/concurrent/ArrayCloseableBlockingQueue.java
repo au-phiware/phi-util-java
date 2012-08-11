@@ -53,6 +53,7 @@ import java.util.*;
  * increased.  Attempts to <tt>put</tt> an element into a full queue
  * will result in the operation blocking; attempts to <tt>take</tt> an
  * element from an empty queue will similarly block.
+ * </p>
  *
  * <p> This class supports an optional fairness policy for ordering
  * waiting producer and consumer threads.  By default, this ordering
@@ -60,14 +61,17 @@ import java.util.*;
  * to <tt>true</tt> grants threads access in FIFO order. Fairness
  * generally decreases throughput but reduces variability and avoids
  * starvation.
+ * </p>
  *
  * <p>This class and its iterator implement all of the
  * <em>optional</em> methods of the {@link Collection} and {@link
  * Iterator} interfaces.
+ * </p>
  *
  * <p>This class is a member of the
  * <a href="{@docRoot}/../technotes/guides/collections/index.html">
  * Java Collections Framework</a>.
+ * </p>
  *
  * @since 1.5
  * @author Doug Lea
@@ -547,7 +551,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * <p>Note that you <em>cannot</em> always tell if an attempt to insert
      * an element will succeed by inspecting <tt>remainingCapacity</tt>
      * because it may be the case that another thread is about to
-     * insert or remove an element.
+     * insert or remove an element.</p>
      */
     public int remainingCapacity() {
         final ReentrantLock lock = this.lock;
@@ -565,8 +569,11 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * if it is present.  More formally, removes an element <tt>e</tt> such
      * that <tt>o.equals(e)</tt>, if this queue contains one or more such
      * elements.
+     *
+     * <p>
      * Returns <tt>true</tt> if this queue contained the specified element
      * (or equivalently, if this queue changed as a result of the call).
+     * </p>
      *
      * @param o element to be removed from this queue, if present
      * @return <tt>true</tt> if this queue changed as a result of the call
@@ -628,9 +635,10 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * <p>The returned array will be "safe" in that no references to it are
      * maintained by this queue.  (In other words, this method must allocate
      * a new array).  The caller is thus free to modify the returned array.
+     * </p>
      *
      * <p>This method acts as bridge between array-based and collection-based
-     * APIs.
+     * APIs.</p>
      *
      * @return an array containing all of the elements in this queue
      */
@@ -662,22 +670,24 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * <p>If this queue fits in the specified array with room to spare
      * (i.e., the array has more elements than this queue), the element in
      * the array immediately following the end of the queue is set to
-     * <tt>null</tt>.
+     * <tt>null</tt>.</p>
      *
      * <p>Like the {@link #toArray()} method, this method acts as bridge between
      * array-based and collection-based APIs.  Further, this method allows
      * precise control over the runtime type of the output array, and may,
-     * under certain circumstances, be used to save allocation costs.
+     * under certain circumstances, be used to save allocation costs.</p>
      *
      * <p>Suppose <tt>x</tt> is a queue known to contain only strings.
      * The following code can be used to dump the queue into a newly
-     * allocated array of <tt>String</tt>:
+     * allocated array of <tt>String</tt>:</p>
      *
      * <pre>
      *     String[] y = x.toArray(new String[0]);</pre>
      *
+     * <p>
      * Note that <tt>toArray(new Object[0])</tt> is identical in function to
      * <tt>toArray()</tt>.
+     * </p>
      *
      * @param a the array into which the elements of the queue are to
      *          be stored, if it is big enough; otherwise, a new array of the
@@ -753,6 +763,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * Removes all available and possibly future elements from this queue and adds them
      * to the given collection.
      *
+     * <p>
      * This operation blocks until this queue is closed or the current thread is interrupted
      * and may be more efficient than repeatedly taking from this queue.
      * When this operation returns this queue will be closed and empty unless the thread is
@@ -760,14 +771,19 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * This operation does not exclude other threads from removing items from this queue
      * but each item is removed from this queue before the item is transferred to the
      * specified collection.
+     * </p>
      *
+     * <p>
      * A failure encountered while attempting to add elements to collection
      * <tt>receiver</tt> may result in elements being in neither,
      * either or both collections when the associated exception is thrown.
+     * </p>
      *
+     * <p>
      * Attempts to drain a queue to itself result in <tt>IllegalArgumentException</tt>.
      * Further, the behavior of this operation is undefined if the specified collection
      * is modified while the operation is in progress.
+     * </p>
      *
      * @return the number of elements transferred
      * @param receiver of transferred elements
@@ -813,6 +829,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * Removes at most the given number of available and future elements from
      * this queue and adds them to the given collection.
      *
+     * <p>
      * This operation may block until this queue is closed and may be more
      * efficient than repeatedly taking from this queue.
      * This operation may return an integer less then <tt>maxElements</tt> if the thread is
@@ -821,14 +838,19 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * but no item is removed from this queue until all items are transferred to the
      * specified collection. (No item may be remove by another thread <em>and</em> transferred
      * to the specified collection.)
+     * </p>
      *
+     * <p>
      * A failure encountered while attempting to add elements to collection
      * <tt>receiver</tt> may result in elements being in neither,
      * either or both collections when the associated exception is thrown.
+     * </p>
      *
+     * <p>
      * Attempts to drain a queue to itself result in <tt>IllegalArgumentException</tt>.
      * Further, the behavior of this operation is undefined if the specified collection
      * is modified while the operation is in progress.
+     * </p>
      *
      * @return the actual number of elements transferred
      * @param receiver of transferred elements
