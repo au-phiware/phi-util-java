@@ -872,7 +872,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
         int max = items.length > maxElements ? maxElements : items.length;
-        int[] offsets = new int[max];
+        int[] indices = new int[max];
         int length = 0;
         try {
             lock.lockInterruptibly();
@@ -887,39 +887,40 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     }
                     if (closed && takeOffset == count)
                         break;
-                    c.add(items[(headIndex + takeOffset) % items.length]);
-                    offsets[n] = takeOffset;
+                    indices[n] = (headIndex + takeOffset) % items.length;
+                    c.add(items[indices[n]]);
                     takeOffset++;
                 }
             } finally {
-                length = n;
                 if (length > 0) {
                     // Remove all drained items (somewhere from headIndex to takeIndex (excl.))
-                    int i = n;
+                    int i = length;
                     while (i-- > 0) {
-                        int j = offsets[i];
-                        if (j == 0) {
+                        int j = indices[i];
+                        if (j == headIndex) {
                             items[headIndex] = null;
                             headIndex = inc(headIndex);
-                            n--;
                         } else {
                             // slide over all others up through takeIndex.
                             for (;;) {
-                                if (j + 1 != takeOffset) {
-                                    items[(headIndex + j) % items.length] = items[(headIndex + j + 1) % items.length];
+                                if (((j + 1) % items.length) != ((headIndex + takeOffset) % items.length)) {
+                                    items[j] = items[(j + 1) % items.length];
                                 } else {
-                                    items[(headIndex + j) % items.length] = null;
+                                    items[j] = null;
                                     break;
                                 }
                             }
                         }
                     }
-                    // slide others from takeIndex up by n
-                    for (i = (headIndex + takeOffset) % items.length; i != putIndex; i = inc(i))
-                        items[dec(i, n)] = items[i];
-                    for (i = dec(i, n); i != putIndex; i = inc(i))
-                        items[i] = null;
-                    takeOffset -= n;
+                    count -= length;
+                    if (count > 0) {
+	                    // slide others from takeIndex up by n
+	                    for (i = (headIndex + takeOffset) % items.length; i != putIndex; i = inc(i))
+	                        items[dec(i, n)] = items[i];
+	                    for (i = dec(i, n); i != putIndex; i = inc(i))
+	                        items[i] = null;
+                    }
+                    takeOffset -= length;
                     putIndex = dec(putIndex, n);
                 }
                 lock.unlock();
@@ -959,7 +960,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
          * Index of element to be returned by next,
          * or a negative number if no such.
          */
-        private int nextIndex;
+        private int nextOffset;
 
         /**
          * nextItem holds on to item fields because once we claim
@@ -978,9 +979,9 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         Itr() {
             lastRet = -1;
             if (count == 0)
-                nextIndex = -1;
+                nextOffset = -1;
             else {
-                nextIndex = headIndex;
+                nextOffset = 0;
                 nextItem = items[headIndex];
             }
         }
@@ -991,7 +992,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
              * only if this iterator passed across threads,
              * which we don't support anyway.
              */
-            return nextIndex >= 0;
+            return nextOffset < count;
         }
 
         /**
@@ -999,13 +1000,13 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
          * Stops iterator when either hits putIndex or sees null item.
          */
         private void checkNext() {
-            if (nextIndex == putIndex) {
-                nextIndex = -1;
+            if (nextOffset >= count || nextOffset < 0) {
+            	nextOffset = -1;
                 nextItem = null;
             } else {
-                nextItem = items[nextIndex];
+                nextItem = items[headIndex + nextOffset];
                 if (nextItem == null)
-                    nextIndex = -1;
+                    nextOffset = -1;
             }
         }
 
@@ -1013,14 +1014,14 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             lock.lock();
             try {
-                if (nextIndex < 0)
+                if (nextOffset < 0)
                     throw new NoSuchElementException();
-                lastRet = nextIndex;
+                lastRet = nextOffset;
                 E x = nextItem;
-                nextIndex = inc(nextIndex);
-                checkNext();
+                nextOffset++;
                 return x;
             } finally {
+            	checkNext();
                 lock.unlock();
             }
         }
@@ -1034,10 +1035,10 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     throw new IllegalStateException();
                 lastRet = -1;
 
-                int head = headIndex;
-                removeAt(i);
+                removeAt((headIndex + i) % items.length);
                 // back up cursor (reset to front if was first element)
-                nextIndex = (i == head) ? headIndex : i;
+                if (nextOffset > 0)
+                	nextOffset--;
                 checkNext();
             } finally {
                 lock.unlock();
