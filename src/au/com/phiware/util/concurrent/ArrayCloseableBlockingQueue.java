@@ -873,7 +873,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         final ReentrantLock lock = this.lock;
         int max = items.length > maxElements ? maxElements : items.length;
         int[] indices = new int[max];
-        int length = 0;
         try {
             lock.lockInterruptibly();
             try {
@@ -892,9 +891,9 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     takeOffset++;
                 }
             } finally {
-                if (length > 0) {
+                if (n > 0) {
                     // Remove all drained items (somewhere from headIndex to takeIndex (excl.))
-                    int i = length;
+                    int i = n;
                     while (i-- > 0) {
                         int j = indices[i];
                         if (j == headIndex) {
@@ -912,7 +911,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                             }
                         }
                     }
-                    count -= length;
+                    count -= n;
                     if (count > 0) {
 	                    // slide others from takeIndex up by n
 	                    for (i = (headIndex + takeOffset) % items.length; i != putIndex; i = inc(i))
@@ -920,7 +919,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
 	                    for (i = dec(i, n); i != putIndex; i = inc(i))
 	                        items[i] = null;
                     }
-                    takeOffset -= length;
+                    takeOffset -= n;
                     putIndex = dec(putIndex, n);
                 }
                 lock.unlock();
@@ -928,7 +927,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } catch (InterruptedException earlyExit) {
             Thread.currentThread().interrupt(); // let caller know
         }
-        return length;
+        return n;
     }
 
 
