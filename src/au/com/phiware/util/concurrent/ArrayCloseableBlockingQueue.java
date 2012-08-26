@@ -841,6 +841,11 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * </p>
      *
      * <p>
+     * The number of elements transferred is naturally limited by the
+     * capacity of this queue and the capacity of the specified collection.
+     * </p>
+     *
+     * <p>
      * A failure encountered while attempting to add elements to collection
      * <tt>receiver</tt> may result in elements being in neither,
      * either or both collections when the associated exception is thrown.
@@ -876,7 +881,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         try {
             lock.lockInterruptibly();
             try {
-                for (; n < max; n++) {
+                int i = (headIndex + takeOffset) % items.length;
+                while (n < max) {
                     try {
                         while (!closed && takeOffset == count)
                             notEmpty.await();
@@ -886,9 +892,11 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     }
                     if (closed && takeOffset == count)
                         break;
-                    indices[n] = (headIndex + takeOffset) % items.length;
-                    c.add(items[indices[n]]);
+                    if (!c.add(items[i]))
+                        break;
+                    indices[n++] = i;
                     takeOffset++;
+                    i = inc(i);
                 }
             } finally {
                 if (n > 0) {
@@ -1006,7 +1014,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                 priorIndex = nextIndex;
                 priorItem = nextItem;
                 nextIndex = inc(nextIndex);
-            	checkNext();
+                checkNext();
                 return priorItem;
             } finally {
                 lock.unlock();
