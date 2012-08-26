@@ -947,7 +947,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
          * Index of element to be returned by next,
          * or a negative number if no such.
          */
-        private int nextOffset;
+        private int nextIndex;
 
         /**
          * nextItem holds on to item fields because once we claim
@@ -961,16 +961,17 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
          * Index of element returned by most recent call to next.
          * Reset to -1 if this element is deleted by a call to remove.
          */
-        private int lastRet;
+        private int priorIndex;
+
+        /**
+         * Remembers last item that was returned by most recent call to
+         * next so that we may remove it safely.
+         */
+        private E priorItem;
 
         Itr() {
-            lastRet = -1;
-            if (count == 0)
-                nextOffset = -1;
-            else {
-                nextOffset = 0;
-                nextItem = items[headIndex];
-            }
+            if (count > 0)
+                nextItem = items[nextIndex = headIndex];
         }
 
         public boolean hasNext() {
@@ -979,7 +980,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
              * only if this iterator passed across threads,
              * which we don't support anyway.
              */
-            return nextOffset < count;
+            return nextItem != null;
         }
 
         /**
@@ -987,28 +988,27 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
          * Stops iterator when either hits putIndex or sees null item.
          */
         private void checkNext() {
-            if (nextOffset >= count || nextOffset < 0) {
-            	nextOffset = -1;
+            while (nextIndex != putIndex && items[nextIndex] == null)
+                nextIndex = inc(nextIndex);
+
+            if (nextIndex == putIndex)
                 nextItem = null;
-            } else {
-                nextItem = items[headIndex + nextOffset];
-                if (nextItem == null)
-                    nextOffset = -1;
-            }
+            else
+                nextItem = items[nextIndex];
         }
 
         public E next() {
             final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             lock.lock();
             try {
-                if (nextOffset < 0)
+                if (nextItem == null)
                     throw new NoSuchElementException();
-                lastRet = nextOffset;
-                E x = nextItem;
-                nextOffset++;
-                return x;
-            } finally {
+                priorIndex = nextIndex;
+                priorItem = nextItem;
+                nextIndex = inc(nextIndex);
             	checkNext();
+                return priorItem;
+            } finally {
                 lock.unlock();
             }
         }
@@ -1017,15 +1017,13 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             lock.lock();
             try {
-                int i = lastRet;
-                if (i == -1)
+                if (priorItem == null)
                     throw new IllegalStateException();
-                lastRet = -1;
 
-                removeAt((headIndex + i) % items.length);
-                // back up cursor (reset to front if was first element)
-                if (nextOffset > 0)
-                	nextOffset--;
+                if (priorItem == items[priorIndex])
+                    removeAt(priorIndex);
+                priorItem = null;
+
                 checkNext();
             } finally {
                 lock.unlock();
