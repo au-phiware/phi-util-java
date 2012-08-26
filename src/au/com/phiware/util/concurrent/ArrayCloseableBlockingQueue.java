@@ -868,7 +868,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             throw new IllegalArgumentException();
         if (maxElements <= 0)
             return 0;
-        int n = 0;
+        int n = 0, length = 0;
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
         int max = items.length > maxElements ? maxElements : items.length;
@@ -892,42 +892,30 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                 }
             } finally {
                 if (n > 0) {
+                    length = n;
+                    count -= n;
                     // Remove all drained items (somewhere from headIndex to takeIndex (excl.))
-                    int i = n;
-                    while (i-- > 0) {
+                    for (int i = 0; i < length; i++) {
                         int j = indices[i];
+                        items[j] = null;
                         if (j == headIndex) {
-                            items[headIndex] = null;
                             headIndex = inc(headIndex);
-                        } else {
-                            // slide over all others up through takeIndex.
-                            for (;;) {
-                                if (((j + 1) % items.length) != ((headIndex + takeOffset) % items.length)) {
-                                    items[j] = items[(j + 1) % items.length];
-                                } else {
-                                    items[j] = null;
-                                    break;
-                                }
-                            }
+                            --n;
+                            --takeOffset;
                         }
                     }
-                    count -= n;
-                    if (count > 0) {
-	                    // slide others from takeIndex up by n
-	                    for (i = (headIndex + takeOffset) % items.length; i != putIndex; i = inc(i))
-	                        items[dec(i, n)] = items[i];
-	                    for (i = dec(i, n); i != putIndex; i = inc(i))
-	                        items[i] = null;
+                    if (takeOffset > 0 && count == ((putIndex + items.length - (headIndex + takeOffset)) % items.length)) {
+                        headIndex = (headIndex + takeOffset) % items.length;
+                        takeOffset = 0;
                     }
-                    takeOffset -= n;
-                    putIndex = dec(putIndex, n);
+                    notFull.signalAll();
                 }
                 lock.unlock();
             }
         } catch (InterruptedException earlyExit) {
             Thread.currentThread().interrupt(); // let caller know
         }
-        return n;
+        return length;
     }
 
 
