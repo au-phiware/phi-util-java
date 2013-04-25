@@ -1,4 +1,4 @@
-PhiUtil for Java
+PhiUtil for Java ![project status](http://stillmaintained.com/au-phiware/phi-util-java.png)
 ================
 
 This project provides some utility classes to supplement the JDK:
