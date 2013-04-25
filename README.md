@@ -4,7 +4,11 @@ PhiUtil for Java ![project status](http://stillmaintained.com/au-phiware/phi-uti
 This project provides some utility classes to supplement the JDK:
 
   * CloseableBlockingQueue interface and implementation that gives the semantics
-  for a [BlockingQueue][] that may be closed.
+    for a [BlockingQueue][] that may be closed.
+  * PausableBlockingQueue interface and implementation that gives the semantics
+    for a [BlockingQueue][] that may pause or suspend the current thread.
+  * Continue interface that makes it easier to coordinate paused/suspended 
+    threads.
 
 
 Forking
