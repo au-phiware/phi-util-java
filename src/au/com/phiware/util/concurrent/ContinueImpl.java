@@ -118,8 +118,10 @@ public class ContinueImpl implements Continue {
 	public void resume() {
     	pauseLock.lock();
         try {
-        	isPaused = false;
-        	unpaused.signalAll();
+            if (isPaused) {
+                isPaused = false;
+                unpaused.signalAll();
+            }
         } finally {
         	pauseLock.unlock();
         }
