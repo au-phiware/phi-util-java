@@ -4,6 +4,8 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
 
+import au.com.phiware.event.Receiver;
+
 /**
  * A ArrayCloseableBlockingQueue that check ins with a Continue before returning from any method.
  * Note the side effect that offer, peek and tryClose could block indefinately.
@@ -26,6 +28,13 @@ public class PausableArrayCloseableBlockingQueue<E>
 
 	/**
 	 * @param capacity
+	 */
+	public PausableArrayCloseableBlockingQueue(int capacity, Receiver eventReceiver) {
+		super(capacity, eventReceiver);
+	}
+
+	/**
+	 * @param capacity
 	 * @param cont
 	 */
 	public PausableArrayCloseableBlockingQueue(int capacity, Continue cont) {
@@ -36,10 +45,29 @@ public class PausableArrayCloseableBlockingQueue<E>
 	/**
 	 * @param capacity
 	 * @param cont
+	 */
+	public PausableArrayCloseableBlockingQueue(int capacity, Receiver eventReceiver, Continue cont) {
+		super(capacity, eventReceiver);
+		setContinue(cont);
+	}
+
+	/**
+	 * @param capacity
+	 * @param cont
 	 * @param fair
 	 */
-	public PausableArrayCloseableBlockingQueue(int capacity, Continue cont, boolean fair) {
-		super(capacity, fair);
+	public PausableArrayCloseableBlockingQueue(int capacity, boolean fair, Continue cont) {
+		super(capacity, fair, (Receiver) null);
+		setContinue(cont);
+	}
+
+	/**
+	 * @param capacity
+	 * @param cont
+	 * @param fair
+	 */
+	public PausableArrayCloseableBlockingQueue(int capacity, boolean fair, Receiver eventReceiver, Continue cont) {
+		super(capacity, fair, eventReceiver);
 		setContinue(cont);
 	}
 
@@ -49,9 +77,21 @@ public class PausableArrayCloseableBlockingQueue<E>
 	 * @param fair
 	 * @param c
 	 */
-	public PausableArrayCloseableBlockingQueue(int capacity, Continue cont, boolean fair,
-			Collection<E> c) {
-		super(capacity, fair, c);
+	public PausableArrayCloseableBlockingQueue(int capacity, boolean fair,
+			Collection<E> c, Continue cont) {
+		super(capacity, fair, null, c);
+		setContinue(cont);
+	}
+
+	/**
+	 * @param capacity
+	 * @param cont
+	 * @param fair
+	 * @param c
+	 */
+	public PausableArrayCloseableBlockingQueue(int capacity, Continue cont, boolean fair, Receiver eventReceiver,
+	                                           Collection<E> c) {
+		super(capacity, fair, eventReceiver, c);
 		setContinue(cont);
 	}
 

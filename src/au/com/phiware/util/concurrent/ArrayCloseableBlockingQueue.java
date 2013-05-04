@@ -34,9 +34,19 @@
  */
 
 package au.com.phiware.util.concurrent;
+import java.util.AbstractQueue;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.ConcurrentModificationException;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.*;
-import java.util.*;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+
+import au.com.phiware.event.Receiver;
+import au.com.phiware.event.Emitter;
 
 /**
  * A bounded {@linkplain BlockingQueue blocking queue} backed by an
@@ -75,10 +85,48 @@ import java.util.*;
  *
  * @since 1.5
  * @author Doug Lea
+ * @author Corin Lawson <corin@phiware.com.au>
  * @param <E> the type of elements held in this collection
  */
 public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
-        implements CloseableBlockingQueue<E>, java.io.Serializable {
+        implements CloseableBlockingQueue<E>, Emitter, java.io.Serializable {
+    public final String uid = String.format("%08X", hashCode());
+
+    public class BlockingQueueEvent {
+        public ArrayCloseableBlockingQueue<E> getSource() {
+            return ArrayCloseableBlockingQueue.this;
+        }
+    }
+
+    public class BlockingQueueElementEvent extends BlockingQueueEvent {
+        private final E[] elements;
+
+        private BlockingQueueElementEvent(final E... elements) {
+            this.elements = elements;
+        }
+
+        public E[] getElements() {
+            return elements;
+        }
+    }
+
+    public class BlockingQueueInsertEvent extends BlockingQueueElementEvent {
+        @SuppressWarnings("unchecked")
+        private BlockingQueueInsertEvent(final E inserted) {
+            super(inserted);
+        }
+    }
+
+    public class BlockingQueueRemoveEvent extends BlockingQueueElementEvent {
+        private BlockingQueueRemoveEvent(final E... removed) {
+            super(removed);
+        }
+    }
+
+    public class BlockingQueueCloseEvent extends BlockingQueueEvent {}
+    public class BlockingQueueOpenEvent extends BlockingQueueEvent {}
+    public class BlockingQueuePreventCloseEvent extends BlockingQueueEvent {}
+    public class BlockingQueuePermitCloseEvent extends BlockingQueueEvent {}
 
     /**
      * Serialization ID. This class relies on default serialization
@@ -87,6 +135,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * necessary here.
      */
     private static final long serialVersionUID = 9096484164273922265L;
+
+    private Receiver events;
 
     /** The queued items  */
     private final E[] items;
@@ -201,10 +251,22 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * capacity and default access policy.
      *
      * @param capacity the capacity of this queue
+     * @param eventReceiver of this queue. (Will receive open event.)
+     * @throws IllegalArgumentException if <tt>capacity</tt> is less than 1
+     */
+    public ArrayCloseableBlockingQueue(int capacity, Receiver eventReceiver) {
+        this(capacity, false, eventReceiver);
+    }
+
+    /**
+     * Creates an <tt>ArrayBlockingQueue</tt> with the given (fixed)
+     * capacity and default access policy.
+     *
+     * @param capacity the capacity of this queue
      * @throws IllegalArgumentException if <tt>capacity</tt> is less than 1
      */
     public ArrayCloseableBlockingQueue(int capacity) {
-        this(capacity, false);
+        this(capacity, null);
     }
 
     /**
@@ -215,10 +277,11 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * @param fair if <tt>true</tt> then queue accesses for threads blocked
      *        on insertion or removal, are processed in FIFO order;
      *        if <tt>false</tt> the access order is unspecified.
+     * @param eventReceiver of this queue. (Will receive open event.)
      * @throws IllegalArgumentException if <tt>capacity</tt> is less than 1
      */
     @SuppressWarnings("unchecked")
-    public ArrayCloseableBlockingQueue(int capacity, boolean fair) {
+    public ArrayCloseableBlockingQueue(int capacity, boolean fair, Receiver eventReceiver) {
         if (capacity <= 0)
             throw new IllegalArgumentException();
         this.items = (E[]) new Object[capacity];
@@ -226,6 +289,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         notEmpty    = lock.newCondition();
         notFull     = lock.newCondition();
         notClosable = lock.newCondition();
+        this.events = eventReceiver;
+        if (events != null) events.post(new BlockingQueueOpenEvent());
     }
 
     /**
@@ -246,12 +311,46 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      */
     public ArrayCloseableBlockingQueue(int capacity, boolean fair,
                               Collection<? extends E> c) {
-        this(capacity, fair);
+        this(capacity, fair, (Receiver) null);
         if (capacity < c.size())
             throw new IllegalArgumentException();
 
         for (Iterator<? extends E> it = c.iterator(); it.hasNext();)
             add(it.next());
+    }
+
+    /**
+     * Creates an <tt>ArrayBlockingQueue</tt> with the given (fixed)
+     * capacity, the specified access policy and initially containing the
+     * elements of the given collection,
+     * added in traversal order of the collection's iterator.
+     *
+     * @param capacity the capacity of this queue
+     * @param fair if <tt>true</tt> then queue accesses for threads blocked
+     *        on insertion or removal, are processed in FIFO order;
+     *        if <tt>false</tt> the access order is unspecified.
+     * @param c the collection of elements to initially contain
+     * @throws IllegalArgumentException if <tt>capacity</tt> is less than
+     *         <tt>c.size()</tt>, or less than 1.
+     * @throws NullPointerException if the specified collection or any
+     *         of its elements are null
+     */
+    public ArrayCloseableBlockingQueue(int capacity, boolean fair,
+                                       Receiver eventReceiver,
+                                       Collection<? extends E> c) {
+        this(capacity, fair, eventReceiver);
+        if (capacity < c.size())
+            throw new IllegalArgumentException();
+
+        for (Iterator<? extends E> it = c.iterator(); it.hasNext();)
+            add(it.next());
+    }
+
+    public Receiver getEventReceiver() {
+        return events;
+    }
+    public void setEventReceiver(Receiver eventReceiver) {
+        this.events = eventReceiver;
     }
 
     @Override
@@ -263,47 +362,54 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     public void close() throws InterruptedException {
         if (closed) return;
         final ReentrantLock lock = this.lock;
+        boolean shouldEmit = false;
         lock.lockInterruptibly();
         try {
             while (closable > 0)
                 notClosable.await();
-            closeNow();
+            if (!closed) {
+                closeNow();
+                shouldEmit = events != null;
+            }
         } finally {
             lock.unlock();
         }
+        if (shouldEmit) events.post(new BlockingQueueCloseEvent());
     }
 
     @Override
     public boolean tryClose() {
         if (closed) return true;
         final ReentrantLock lock = this.lock;
+        boolean didClose = false;
         if (!lock.tryLock())
             return closed;
         try {
-            if (closable > 0)
-                return false;
-            closeNow();
-            return true;
+            if (didClose = closable <= 0)
+                closeNow();
         } finally {
             lock.unlock();
         }
+        if (didClose && events != null) events.post(new BlockingQueueCloseEvent());
+        return didClose;
     }
 
     @Override
     public boolean tryClose(long time, TimeUnit unit)
             throws InterruptedException {
         if (closed) return true;
+        boolean didClose = false;
         long nanos = unit.toNanos(time);
         final ReentrantLock lock = this.lock;
         lock.lockInterruptibly();
         try {
             for (;;) {
-                if (!closed && closable ==  0) {
+                if (didClose = (!closed && closable ==  0)) {
                     closeNow();
-                    return true;
+                    break;
                 }
                 if (closed || nanos <= 0)
-                    return closed;
+                    break;
                 try {
                     nanos = notClosable.awaitNanos(nanos);
                 } catch (InterruptedException ie) {
@@ -314,6 +420,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (didClose && events != null) events.post(new BlockingQueueCloseEvent());
+        return didClose;
     }
 
     @Override
@@ -378,17 +486,18 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     public boolean offer(E e) {
         if (e == null) throw new NullPointerException();
         final ReentrantLock lock = this.lock;
+        boolean success = false;
         lock.lock();
         try {
-            if (closed || count == items.length)
-                return false;
-            else {
+            if (!closed && count != items.length) {
                 insert(e);
-                return true;
+                success = true;
             }
         } finally {
             lock.unlock();
         }
+        if (success && events != null) events.post(new BlockingQueueInsertEvent(e));
+        return success;
     }
 
     /**
@@ -418,6 +527,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (events != null) events.post(new BlockingQueueInsertEvent(e));
     }
 
     /**
@@ -433,16 +543,18 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
 
         if (e == null) throw new NullPointerException();
         long nanos = unit.toNanos(timeout);
+        boolean success = false;
         final ReentrantLock lock = this.lock;
         lock.lockInterruptibly();
         try {
             for (;;) {
                 if (!closed && count != items.length) {
                     insert(e);
-                    return true;
+                    success = true;
+                    break;
                 }
                 if (closed || nanos <= 0)
-                    return false;
+                    break;
                 try {
                     nanos = notFull.awaitNanos(nanos);
                 } catch (InterruptedException ie) {
@@ -453,23 +565,29 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (success && events != null) events.post(new BlockingQueueInsertEvent(e));
+        return success;
     }
 
+    @SuppressWarnings("unchecked")
     public E poll() {
         final ReentrantLock lock = this.lock;
         lock.lock();
+        E x = null;
         try {
-            if (takeOffset == count)
-                return null;
-            E x = extract();
-            return x;
+            if (takeOffset != count)
+                x = extract();
         } finally {
             lock.unlock();
         }
+        if (x != null && events != null) events.post(new BlockingQueueRemoveEvent(x));
+        return x;
     }
 
+    @SuppressWarnings("unchecked")
     public E take() throws InterruptedException {
         final ReentrantLock lock = this.lock;
+        E x = null;
         lock.lockInterruptibly();
         try {
             try {
@@ -481,25 +599,28 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             }
             if (closed && takeOffset == count)
                 throw new QueueClosedException("Queue closed");
-            E x = extract();
-            return x;
+            x = extract();
         } finally {
             lock.unlock();
         }
+        if (x != null && events != null) events.post(new BlockingQueueRemoveEvent(x));
+        return x;
     }
 
+    @SuppressWarnings("unchecked")
     public E poll(long timeout, TimeUnit unit) throws InterruptedException {
         long nanos = unit.toNanos(timeout);
         final ReentrantLock lock = this.lock;
+        E x = null;
         lock.lockInterruptibly();
         try {
             for (;;) {
                 if (takeOffset != count) {
-                    E x = extract();
-                    return x;
+                    x = extract();
+                    break;
                 }
                 if (closed || nanos <= 0)
-                    return null;
+                    break;
                 try {
                     nanos = notEmpty.awaitNanos(nanos);
                 } catch (InterruptedException ie) {
@@ -511,6 +632,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (x != null && events != null) events.post(new BlockingQueueRemoveEvent(x));
+        return x;
     }
 
     public E peek() {
@@ -578,20 +701,23 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * @param o element to be removed from this queue, if present
      * @return <tt>true</tt> if this queue changed as a result of the call
      */
+    @SuppressWarnings("unchecked")
     public boolean remove(Object o) {
         if (o == null) return false;
         final E[] items = this.items;
+        E x = null;
+        boolean success = false;
         final ReentrantLock lock = this.lock;
         lock.lock();
         try {
             int i = headIndex;
             int k = 0;
-            for (;;) {
-                if (k++ >= count)
-                    return false;
+            while (k++ >= count) {
                 if (o.equals(items[i])) {
+                    x = items[i];
                     removeAt(i);
-                    return true;
+                    success = true;
+                    break;
                 }
                 i = inc(i);
             }
@@ -599,6 +725,8 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (success && events != null) events.post(new BlockingQueueRemoveEvent(x));
+        return success;
     }
 
     /**
@@ -738,7 +866,12 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * Atomically removes all of the elements from this queue.
      * The queue will be empty after this call returns.
      */
+    @SuppressWarnings("unchecked")
     public void clear() {
+        Object[] logE = null;
+        int logEi = 0;
+        final boolean logEe = events != null;
+        if (logEe && count > 0) logE = new Object[count];
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
         lock.lock();
@@ -746,6 +879,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             int i = headIndex;
             int k = count;
             while (k-- > 0) {
+                if (logEe) logE[logEi++] = items[i];
                 items[i] = null;
                 i = inc(i);
             }
@@ -757,6 +891,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         } finally {
             lock.unlock();
         }
+        if (logE != null) events.post(new BlockingQueueRemoveEvent((E[]) logE));
     }
 
     /**
@@ -793,13 +928,17 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * @throws NullPointerException          {@inheritDoc}
      * @throws IllegalArgumentException      {@inheritDoc}
      */
+    @SuppressWarnings("unchecked")
     public int drainTo(Collection<? super E> receiver) {
         if (receiver == null)
             throw new NullPointerException();
         if (receiver == this)
             throw new IllegalArgumentException();
+        Collection<E> logE = new ArrayList<E>();
+        final boolean logEe = events != null;
         int n = 0;
         final ReentrantLock lock = this.lock;
+        if (logEe) logE = new ArrayList<E>();
         try {
             lock.lockInterruptibly();
             try {
@@ -813,13 +952,16 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     }
                     if (closed && takeOffset == count)
                         break;
-                    receiver.add(extract());
+                    E x = extract();
+                    receiver.add(x);
+                    if (logEe) logE.add(x);
                     n++;
                 }
             } finally {
                 lock.unlock();
             }
-        } catch (InterruptedException earlyExit) {
+            if (logEe) events.post(new BlockingQueueRemoveEvent((E[]) logE.toArray()));
+       } catch (InterruptedException earlyExit) {
             Thread.currentThread().interrupt(); // let caller know
         }
         return n;
@@ -866,13 +1008,17 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * @throws NullPointerException          {@inheritDoc}
      * @throws IllegalArgumentException      {@inheritDoc}
      */
-    public int drainTo(Collection<? super E> c, int maxElements) {
-        if (c == null)
+    @SuppressWarnings("unchecked")
+    public int drainTo(Collection<? super E> receiver, int maxElements) {
+        if (receiver == null)
             throw new NullPointerException();
-        if (c == this)
+        if (receiver == this)
             throw new IllegalArgumentException();
         if (maxElements <= 0)
             return 0;
+        Object[] logE = null;
+        int logEi = 0;
+        final boolean logEe = events != null;
         int n = 0, length = 0;
         final E[] items = this.items;
         final ReentrantLock lock = this.lock;
@@ -892,7 +1038,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                     }
                     if (closed && takeOffset == count)
                         break;
-                    if (!c.add(items[i]))
+                    if (!receiver.add(items[i]))
                         break;
                     indices[n++] = i;
                     takeOffset++;
@@ -900,11 +1046,13 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                 }
             } finally {
                 if (n > 0) {
+                    if (logEe) logE = new Object[n];
                     length = n;
                     count -= n;
                     // Remove all drained items (somewhere from headIndex to takeIndex (excl.))
                     for (int i = 0; i < length; i++) {
                         int j = indices[i];
+                        if (logEe) logE[logEi++] = items[j];
                         items[j] = null;
                         if (j == headIndex) {
                             headIndex = inc(headIndex);
@@ -920,6 +1068,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
                 }
                 lock.unlock();
             }
+            if (logE != null) events.post(new BlockingQueueRemoveEvent((E[]) logE));
         } catch (InterruptedException earlyExit) {
             Thread.currentThread().interrupt(); // let caller know
         }
@@ -1021,21 +1170,26 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             }
         }
 
+        @SuppressWarnings("unchecked")
         public void remove() {
             final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
+            E x = null;
             lock.lock();
             try {
                 if (priorItem == null)
                     throw new IllegalStateException();
 
-                if (priorItem == items[priorIndex])
+                if (priorItem == items[priorIndex]) {
+                    x = items[priorIndex];
                     removeAt(priorIndex);
+                }
                 priorItem = null;
 
                 checkNext();
             } finally {
                 lock.unlock();
             }
+            if (events != null && x != null) events.post(new BlockingQueueRemoveEvent(x));
         }
     }
 }
