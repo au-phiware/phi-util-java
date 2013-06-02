@@ -101,7 +101,7 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     public class BlockingQueueElementEvent extends BlockingQueueEvent {
         private final E[] elements;
 
-        private BlockingQueueElementEvent(final E... elements) {
+        @SafeVarargs private BlockingQueueElementEvent(final E... elements) {
             this.elements = elements;
         }
 
@@ -111,14 +111,13 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
     }
 
     public class BlockingQueueInsertEvent extends BlockingQueueElementEvent {
-        @SuppressWarnings("unchecked")
         private BlockingQueueInsertEvent(final E inserted) {
             super(inserted);
         }
     }
 
     public class BlockingQueueRemoveEvent extends BlockingQueueElementEvent {
-        private BlockingQueueRemoveEvent(final E... removed) {
+        @SafeVarargs private BlockingQueueRemoveEvent(final E... removed) {
             super(removed);
         }
     }
@@ -569,7 +568,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         return success;
     }
 
-    @SuppressWarnings("unchecked")
     public E poll() {
         final ReentrantLock lock = this.lock;
         lock.lock();
@@ -584,7 +582,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         return x;
     }
 
-    @SuppressWarnings("unchecked")
     public E take() throws InterruptedException {
         final ReentrantLock lock = this.lock;
         E x = null;
@@ -607,7 +604,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
         return x;
     }
 
-    @SuppressWarnings("unchecked")
     public E poll(long timeout, TimeUnit unit) throws InterruptedException {
         long nanos = unit.toNanos(timeout);
         final ReentrantLock lock = this.lock;
@@ -701,7 +697,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
      * @param o element to be removed from this queue, if present
      * @return <tt>true</tt> if this queue changed as a result of the call
      */
-    @SuppressWarnings("unchecked")
     public boolean remove(Object o) {
         if (o == null) return false;
         final E[] items = this.items;
@@ -1170,7 +1165,6 @@ public class ArrayCloseableBlockingQueue<E> extends AbstractQueue<E>
             }
         }
 
-        @SuppressWarnings("unchecked")
         public void remove() {
             final ReentrantLock lock = ArrayCloseableBlockingQueue.this.lock;
             E x = null;
